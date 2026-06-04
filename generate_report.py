@@ -21,6 +21,7 @@ EASTMONEY_HEADERS = {
     "Referer": "https://fundf10.eastmoney.com/",
     "User-Agent": "Mozilla/5.0 fund-tracker/1.0",
 }
+EASTMONEY_PAGE_SIZE = 20
 
 
 @dataclass
@@ -75,11 +76,11 @@ def synthetic_nav_series(seed: int, days: int = 90) -> pd.Series:
     return pd.Series(nav, index=dates, name="nav")
 
 
-def fetch_eastmoney_nav_series(fund_code: str, days: int = 90) -> FundNavData:
+def fetch_eastmoney_page(fund_code: str, page_index: int) -> dict[str, Any]:
     params = {
         "fundCode": fund_code,
-        "pageIndex": 1,
-        "pageSize": max(days, 30),
+        "pageIndex": page_index,
+        "pageSize": EASTMONEY_PAGE_SIZE,
         "startDate": "",
         "endDate": "",
         "_": int(time.time() * 1000),
@@ -94,8 +95,24 @@ def fetch_eastmoney_nav_series(fund_code: str, days: int = 90) -> FundNavData:
     payload = response.json()
     if payload.get("ErrCode") not in (0, None):
         raise ValueError(f"Eastmoney returned ErrCode={payload.get('ErrCode')}: {payload.get('ErrMsg')}")
+    return payload
 
-    records = payload.get("Data", {}).get("LSJZList", [])
+
+def fetch_eastmoney_nav_series(fund_code: str, days: int = 90) -> FundNavData:
+    records: list[dict[str, Any]] = []
+    page_index = 1
+    max_pages = math.ceil(days / EASTMONEY_PAGE_SIZE) + 2
+
+    while len(records) < days and page_index <= max_pages:
+        payload = fetch_eastmoney_page(fund_code, page_index)
+        page_records = payload.get("Data", {}).get("LSJZList", [])
+        if not page_records:
+            break
+        records.extend(page_records)
+        if len(page_records) < EASTMONEY_PAGE_SIZE:
+            break
+        page_index += 1
+
     if not records:
         raise ValueError("Eastmoney returned no NAV records")
 
@@ -105,10 +122,11 @@ def fetch_eastmoney_nav_series(fund_code: str, days: int = 90) -> FundNavData:
 
     df["date"] = pd.to_datetime(df["FSRQ"], errors="coerce")
     df["nav"] = pd.to_numeric(df["DWJZ"], errors="coerce")
-    df = df.dropna(subset=["date", "nav"]).sort_values("date")
+    df = df.dropna(subset=["date", "nav"]).drop_duplicates(subset=["date"]).sort_values("date")
     if len(df) < 22:
         raise ValueError(f"Need at least 22 real NAV observations, got {len(df)}")
 
+    df = df.tail(days)
     nav = pd.Series(df["nav"].to_numpy(), index=df["date"], name="nav")
     latest_date = df["date"].iloc[-1].strftime("%Y-%m-%d")
     return FundNavData(nav=nav, source="Eastmoney", latest_date=latest_date)
