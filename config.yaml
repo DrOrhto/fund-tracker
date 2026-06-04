@@ -1,0 +1,60 @@
+project:
+  name: fund-tracker
+  timezone: Asia/Shanghai
+  base_currency: CNY
+  report_language: zh-CN
+  target_return_annual: 0.10
+  risk_profile: medium
+
+funds:
+  - id: hs300_link
+    name: 华夏沪深300ETF联接
+    category: A股核心宽基
+    risk_level: R3
+    allocation_cny: 1000
+    notes: 关注沪深300、中国政策、人民币汇率、A股资金面
+
+  - id: fullgoal_dividend_qdii
+    name: 富国红利精选QDII
+    category: 高股息/QDII
+    risk_level: R3-R4
+    allocation_cny: 1000
+    notes: 关注港股红利、全球高股息、美元及港币汇率
+
+  - id: nasdaq100_qdii
+    name: 纳斯达克100指数QDII
+    category: 美国科技成长/QDII
+    risk_level: R4
+    allocation_cny: 1000
+    priority: high
+    notes: 重点关注美联储、美国CPI/非农、AI、NVIDIA、Microsoft、Apple、美元指数
+
+  - id: xingquan_antai_fof
+    name: 兴全安泰积极养老五年FOF
+    category: 多资产FOF
+    risk_level: R3
+    allocation_cny: 1000
+    notes: 关注股债配置、FOF回撤、利率变化
+
+  - id: efund_global_quality_qdii
+    name: 易方达全球优质企业QDII
+    category: 全球优质企业/QDII
+    risk_level: R4
+    allocation_cny: 1000
+    priority: high
+    notes: 重点关注美国、欧洲、日本龙头企业财报、全球风险偏好、美元/人民币汇率
+
+market_indicators:
+  - Nasdaq 100
+  - S&P 500
+  - CSI 300
+  - Hang Seng Index
+  - USD/CNY
+  - US 10Y Treasury Yield
+  - VIX
+
+risk_rules:
+  single_fund_weekly_drawdown_alert: -0.05
+  single_fund_monthly_drawdown_alert: -0.10
+  portfolio_take_profit_zone: 0.10
+  portfolio_review_zone: -0.08
