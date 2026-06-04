@@ -1,0 +1,36 @@
+name: Daily Fund Report
+
+on:
+  schedule:
+    # GitHub Actions cron uses UTC. 10:00 UTC = 18:00 Beijing time (Asia/Shanghai).
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate Markdown report
+        run: python generate_report.py --config config.yaml --output-dir reports
+
+      - name: Commit generated report
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Generate daily fund report"
+          file_pattern: reports/*.md
