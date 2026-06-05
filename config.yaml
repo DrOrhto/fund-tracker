@@ -9,6 +9,7 @@ project:
 funds:
   - id: hs300_link
     name: 华夏沪深300ETF联接
+    fund_code: "000051"
     category: A股核心宽基
     risk_level: R3
     allocation_cny: 1000
@@ -16,6 +17,7 @@ funds:
 
   - id: fullgoal_dividend_qdii
     name: 富国红利精选QDII
+    fund_code: "009108"
     category: 高股息/QDII
     risk_level: R3-R4
     allocation_cny: 1000
@@ -23,6 +25,7 @@ funds:
 
   - id: nasdaq100_qdii
     name: 纳斯达克100指数QDII
+    fund_code: "015299"
     category: 美国科技成长/QDII
     risk_level: R4
     allocation_cny: 1000
@@ -31,6 +34,7 @@ funds:
 
   - id: xingquan_antai_fof
     name: 兴全安泰积极养老五年FOF
+    fund_code: "010267"
     category: 多资产FOF
     risk_level: R3
     allocation_cny: 1000
@@ -38,6 +42,7 @@ funds:
 
   - id: efund_global_quality_qdii
     name: 易方达全球优质企业QDII
+    fund_code: "018229"
     category: 全球优质企业/QDII
     risk_level: R4
     allocation_cny: 1000

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import logging
 import math
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +12,16 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import requests
 import yaml
+
+
+EASTMONEY_NAV_URL = "https://api.fund.eastmoney.com/f10/lsjz"
+EASTMONEY_HEADERS = {
+    "Referer": "https://fundf10.eastmoney.com/",
+    "User-Agent": "Mozilla/5.0 fund-tracker/1.0",
+}
+EASTMONEY_PAGE_SIZE = 20
 
 
 @dataclass
@@ -19,6 +31,25 @@ class FundMetrics:
     monthly_return: float
     max_drawdown: float
     volatility: float
+
+
+@dataclass
+class FundNavData:
+    nav: pd.Series
+    source: str
+    latest_date: str
+
+
+def setup_logging(log_dir: Path) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[
+            logging.FileHandler(log_dir / "fund_data_errors.log", encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -31,13 +62,96 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
+def stable_seed(value: str) -> int:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return int(digest[:16], 16) % (2**32)
+
+
 def synthetic_nav_series(seed: int, days: int = 90) -> pd.Series:
-    """Generate deterministic fallback NAV data until a real fund data API is wired in."""
+    """Generate deterministic fallback NAV data if the real fund data source fails."""
     rng = np.random.default_rng(seed)
     daily_returns = rng.normal(loc=0.00035, scale=0.012, size=days)
     nav = 1.0 * np.cumprod(1 + daily_returns)
     dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=days)
     return pd.Series(nav, index=dates, name="nav")
+
+
+def fetch_eastmoney_page(fund_code: str, page_index: int) -> dict[str, Any]:
+    params = {
+        "fundCode": fund_code,
+        "pageIndex": page_index,
+        "pageSize": EASTMONEY_PAGE_SIZE,
+        "startDate": "",
+        "endDate": "",
+        "_": int(time.time() * 1000),
+    }
+    response = requests.get(
+        EASTMONEY_NAV_URL,
+        params=params,
+        headers=EASTMONEY_HEADERS,
+        timeout=12,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("ErrCode") not in (0, None):
+        raise ValueError(f"Eastmoney returned ErrCode={payload.get('ErrCode')}: {payload.get('ErrMsg')}")
+    return payload
+
+
+def fetch_eastmoney_nav_series(fund_code: str, days: int = 90) -> FundNavData:
+    records: list[dict[str, Any]] = []
+    page_index = 1
+    max_pages = math.ceil(days / EASTMONEY_PAGE_SIZE) + 2
+
+    while len(records) < days and page_index <= max_pages:
+        payload = fetch_eastmoney_page(fund_code, page_index)
+        page_records = payload.get("Data", {}).get("LSJZList", [])
+        if not page_records:
+            break
+        records.extend(page_records)
+        if len(page_records) < EASTMONEY_PAGE_SIZE:
+            break
+        page_index += 1
+
+    if not records:
+        raise ValueError("Eastmoney returned no NAV records")
+
+    df = pd.DataFrame(records)
+    if "FSRQ" not in df or "DWJZ" not in df:
+        raise ValueError("Eastmoney response is missing FSRQ or DWJZ")
+
+    df["date"] = pd.to_datetime(df["FSRQ"], errors="coerce")
+    df["nav"] = pd.to_numeric(df["DWJZ"], errors="coerce")
+    df = df.dropna(subset=["date", "nav"]).drop_duplicates(subset=["date"]).sort_values("date")
+    if len(df) < 22:
+        raise ValueError(f"Need at least 22 real NAV observations, got {len(df)}")
+
+    df = df.tail(days)
+    nav = pd.Series(df["nav"].to_numpy(), index=df["date"], name="nav")
+    latest_date = df["date"].iloc[-1].strftime("%Y-%m-%d")
+    return FundNavData(nav=nav, source="Eastmoney", latest_date=latest_date)
+
+
+def load_fund_nav(fund: dict[str, Any]) -> FundNavData:
+    fund_code = str(fund.get("fund_code", "")).strip()
+    if fund_code:
+        try:
+            return fetch_eastmoney_nav_series(fund_code)
+        except Exception as exc:
+            logging.exception(
+                "Failed to fetch real NAV for %s (%s), falling back to synthetic data: %s",
+                fund.get("name", fund.get("id", "unknown")),
+                fund_code,
+                exc,
+            )
+    else:
+        logging.error(
+            "Fund %s has no fund_code configured, falling back to synthetic data",
+            fund.get("name", fund.get("id", "unknown")),
+        )
+
+    nav = synthetic_nav_series(seed=stable_seed(str(fund["id"])))
+    return FundNavData(nav=nav, source="synthetic_nav_series", latest_date=nav.index[-1].strftime("%Y-%m-%d"))
 
 
 def compute_metrics(nav: pd.Series) -> FundMetrics:
@@ -100,20 +214,38 @@ def generate_report(config: dict[str, Any], output_dir: Path) -> Path:
     project = config.get("project", {})
     rows: list[dict[str, str]] = []
 
-    for index, fund in enumerate(config["funds"], start=1):
-        seed = abs(hash(fund["id"])) % (2**32)
-        nav = synthetic_nav_series(seed=seed)
-        metrics = compute_metrics(nav)
+    for fund in config["funds"]:
+        try:
+            nav_data = load_fund_nav(fund)
+            metrics = compute_metrics(nav_data.nav)
+        except Exception as exc:
+            logging.exception(
+                "Failed to compute metrics for %s, using synthetic fallback: %s",
+                fund.get("name", fund.get("id", "unknown")),
+                exc,
+            )
+            fallback_nav = synthetic_nav_series(seed=stable_seed(str(fund["id"])))
+            nav_data = FundNavData(
+                nav=fallback_nav,
+                source="synthetic_nav_series",
+                latest_date=fallback_nav.index[-1].strftime("%Y-%m-%d"),
+            )
+            metrics = compute_metrics(nav_data.nav)
+
         rows.append({
             "基金": fund["name"],
+            "基金代码": str(fund.get("fund_code", "")),
             "类别": fund.get("category", ""),
             "风险等级": fund.get("risk_level", ""),
             "投入金额": f"{fund.get('allocation_cny', 0):,.0f} CNY",
+            "最新净值": f"{nav_data.nav.iloc[-1]:.4f}",
+            "净值日期": nav_data.latest_date,
             "当日涨跌幅": pct(metrics.daily_return),
             "近1周收益": pct(metrics.weekly_return),
             "近1个月收益": pct(metrics.monthly_return),
             "最大回撤": pct(metrics.max_drawdown),
             "波动率": pct(metrics.volatility),
+            "数据源": nav_data.source,
             "风险状态": risk_label(metrics),
         })
 
@@ -147,6 +279,11 @@ def generate_report(config: dict[str, Any], output_dir: Path) -> Path:
     else:
         lines.append("- 当前组合风险状态正常，继续执行每日跟踪。")
 
+    fallback_funds = df[df["数据源"] == "synthetic_nav_series"]
+    if not fallback_funds.empty:
+        names = "、".join(fallback_funds["基金"].tolist())
+        lines.append(f"- 以下基金真实净值读取失败，已自动使用模拟净值兜底：{names}。请查看 logs/fund_data_errors.log。")
+
     lines.extend([
         "",
         build_macro_section(),
@@ -159,8 +296,8 @@ def generate_report(config: dict[str, Any], output_dir: Path) -> Path:
         "",
         "## 数据说明",
         "",
-        "- 当前版本使用确定性模拟净值数据生成指标，保证自动化流程可运行。",
-        "- 后续可接入基金净值API或本地CSV数据源替换 synthetic_nav_series。",
+        "- 基金净值优先读取 Eastmoney/Tiantian Fund 历史净值接口，并基于最近净值序列计算收益、回撤和波动率。",
+        "- 单只基金真实数据获取或指标计算失败时，会记录错误日志并自动 fallback 到 synthetic_nav_series，不中断整份日报生成。",
     ])
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -173,6 +310,7 @@ def main() -> None:
     parser.add_argument("--output-dir", default="reports")
     args = parser.parse_args()
 
+    setup_logging(Path("logs"))
     config = load_config(Path(args.config))
     report_path = generate_report(config, Path(args.output_dir))
     print(f"Generated report: {report_path}")
