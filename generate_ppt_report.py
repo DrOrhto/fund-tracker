@@ -1,8 +1,10 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import argparse
 import logging
 import math
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -272,6 +274,19 @@ def add_source_slide(prs: Presentation, rows: list[dict[str, Any]], report_date:
     slide.text(0.75, 6.28, 10.8, 0.25, "提示：本报告仅用于投资记录和风险监测，不构成收益保证或买卖建议。", size=9, color=MUTED)
 
 
+def validate_pptx_utf8(path: Path) -> None:
+    """Ensure all XML parts in the generated PPTX package decode as UTF-8."""
+    with zipfile.ZipFile(path) as package:
+        xml_parts = [name for name in package.namelist() if name.endswith(".xml") or name.endswith(".rels")]
+        if not xml_parts:
+            raise ValueError(f"PPTX package has no XML parts: {path}")
+        for name in xml_parts:
+            try:
+                package.read(name).decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"PPTX XML part is not UTF-8 decodable: {name}") from exc
+
+
 def build_ppt(config: dict[str, Any], output_dir: Path) -> Path:
     report_date = report_datetime(config).strftime("%Y-%m-%d")
     rows = collect_rows(config)
@@ -287,6 +302,7 @@ def build_ppt(config: dict[str, Any], output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{report_date}.pptx"
     prs.save(output_path)
+    validate_pptx_utf8(output_path)
     return output_path
 
 
@@ -299,7 +315,7 @@ def main() -> None:
     setup_logging(Path("logs"))
     config = load_config(Path(args.config))
     output_path = build_ppt(config, Path(args.output_dir))
-    print(f"Generated PPTX report: {output_path}")
+    print(f"Generated UTF-8 PPTX report: {output_path}")
 
 
 if __name__ == "__main__":
