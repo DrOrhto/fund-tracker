@@ -32,8 +32,11 @@ jobs:
       - name: Generate Markdown report
         run: python generate_report.py --config config.yaml --output-dir reports
 
-      - name: Commit generated report
+      - name: Generate PPTX report
+        run: python generate_ppt_report.py --config config.yaml --output-dir reports
+
+      - name: Commit generated reports
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Generate daily fund report"
-          file_pattern: reports/*.md
+          commit_message: "Generate daily fund reports"
+          file_pattern: reports/*.md reports/*.pptx
