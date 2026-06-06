@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -60,6 +61,15 @@ def load_config(path: Path) -> dict[str, Any]:
     if len(config["funds"]) != 5:
         raise ValueError(f"Expected exactly 5 funds, got {len(config['funds'])}")
     return config
+
+
+def report_datetime(config: dict[str, Any]) -> datetime:
+    timezone_name = config.get("project", {}).get("timezone", "Asia/Shanghai")
+    try:
+        return datetime.now(ZoneInfo(timezone_name))
+    except Exception:
+        logging.exception("Failed to load timezone %s, falling back to system local time", timezone_name)
+        return datetime.now()
 
 
 def stable_seed(value: str) -> int:
@@ -210,7 +220,7 @@ def build_macro_section() -> str:
 
 
 def generate_report(config: dict[str, Any], output_dir: Path) -> Path:
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = report_datetime(config).strftime("%Y-%m-%d")
     project = config.get("project", {})
     rows: list[dict[str, str]] = []
 
